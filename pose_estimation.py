@@ -6,10 +6,12 @@ python pose_estimation.py --K_Matrix calibration_matrix.npy --D_Coeff distortion
 
 import numpy as np
 import cv2
+import cv2.aruco as aruco
 import sys
 from utils import ARUCO_DICT
 import argparse
 import time
+import math
 
 
 def pose_esitmation(frame, aruco_dict_type, matrix_coefficients, distortion_coefficients):
@@ -28,23 +30,65 @@ def pose_esitmation(frame, aruco_dict_type, matrix_coefficients, distortion_coef
     parameters = cv2.aruco.DetectorParameters_create()
 
 
-    corners, ids, rejected_img_points = cv2.aruco.detectMarkers(gray, cv2.aruco_dict,parameters=parameters,
-        cameraMatrix=matrix_coefficients,
-        distCoeff=distortion_coefficients)
+    corners, ids, rejected_img_points = cv2.aruco.detectMarkers(gray, cv2.aruco_dict,parameters=parameters, cameraMatrix=matrix_coefficients, distCoeff=distortion_coefficients)
 
         # If markers are detected
     if len(corners) > 0:
         for i in range(0, len(ids)):
-            # Estimate pose of each marker and return the values rvec and tvec---(different from those of camera coefficients)
-            rvec, tvec, markerPoints = cv2.aruco.estimatePoseSingleMarkers(corners[i], 0.02, matrix_coefficients,
-                                                                       distortion_coefficients)
+            
             # Draw a square around the markers
             cv2.aruco.drawDetectedMarkers(frame, corners) 
-
+            
+            # Estimate pose of each marker and return the values rvec and tvec---(different from those of camera coefficients)
+            rvec_list, tvec_list, markerPoints = cv2.aruco.estimatePoseSingleMarkers(corners[i], 20, matrix_coefficients, distortion_coefficients)
+            
+            rvec = rvec_list[0][0]
+            tvec = tvec_list[0][0]
             # Draw Axis
-            cv2.aruco.drawAxis(frame, matrix_coefficients, distortion_coefficients, rvec, tvec, 0.01)  
+            cv2.aruco.drawAxis(frame, matrix_coefficients, distortion_coefficients, rvec, tvec, 10) 
+            
+            rvec_flip = rvec * -1
+            tvec_flip = tvec * -1
+            rotation_matrix, jacobian = cv2.Rodrigues(rvec_flip)
+            realworld_tvec = np.dot(rotation_matrix, tvec_flip)
+        
+            pitch, roll, yaw = rotationMatrixToEulerAngles(rotation_matrix)
+            x = "{:.2f}".format(realworld_tvec[0])
+            y = "{:.2f}".format(realworld_tvec[1])
+            z = "{:.2f}".format(realworld_tvec[2])
+            pitch = "{:.2%}".format(pitch)
+            roll = "{:.2%}".format(roll)
+            yaw = "{:.2%}".format(yaw)
+            print("X = ",x, "Y = ", y, "Z = ", z, "Pitch = ", pitch, "Roll = ", roll, "Yaw = ", yaw)  
 
     return frame
+    
+    
+def isRotationMatrix(R):
+    Rt = np.transpose(R)
+    shouldBeIdentity = np.dot(Rt, R)
+    I = np.identity(3, dtype=R.dtype)
+    n = np.linalg.norm(I - shouldBeIdentity)
+    return n < 1e-6
+    
+    
+def rotationMatrixToEulerAngles(R):
+    assert (isRotationMatrix(R))
+    
+    sy = math.sqrt(R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0])
+    
+    singular = sy < 1e-6
+    
+    if not singular:
+        x = math.atan2(R[2,1], R[2,2])
+        y = math.atan2(-R[2,0], sy)
+        z = math.atan2(R[1,0], R[0,0])
+    else:
+        x = math.atan2(-R[1,2], R[1,1])
+        y = math.atan2(-R[2,0], sy)
+        z = 0
+    
+    return np.array([x, y, z])
 
 if __name__ == '__main__':
 
@@ -68,7 +112,7 @@ if __name__ == '__main__':
 
     video = cv2.VideoCapture(0)
     time.sleep(2.0)
-
+    marker_size = 100
     while True:
         ret, frame = video.read()
 
@@ -76,11 +120,9 @@ if __name__ == '__main__':
             break
         
         output = pose_esitmation(frame, aruco_dict_type, k, d)
-        time.sleep(0.01)
         
-
         cv2.imshow('Estimated Pose', output)
-        print(output)
+        
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
             break
